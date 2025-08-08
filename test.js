@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import { Client } from "discord.js-selfbot-v13";
 import { Streamer, prepareStream, playStream, Utils } from '@dank074/discord-video-stream';
+import fs from 'fs';
+import path from 'path';
 
 // Override console.log to filte            message.reply(`🎬 **Switched to Season:** ${foundSeason} in ${currentShow}\n▶️ Use \`$start\` to begin playing`);           message.reply(`🎬 **Switched to Season:** ${foundSeason} in ${currentShow}\n▶️ Use \`$start\` to begin playing`); out unwanted logs
 const originalConsoleLog = console.log;
@@ -39,32 +41,79 @@ async function main() {
         console.warn("Text channel not found. Make sure TEXT_CHANNEL_ID is set in your .env file");
     }
 
-    // Hierarchical video structure: Shows -> Seasons -> Episodes
-    const videoLibrary = {
-        "Show 1": {
-            "Season 1": [
-                "C:/Users/admin/Desktop/A king.mp4",
-                "C:/Users/admin/Desktop/burgers_on_my_mind.mp4",
-                "C:/Users/admin/Desktop/carrib_cookie.mp4"
-            ],
-            "Season 2": [
-                "C:/Users/admin/Desktop/changing_your_name.mp4",
-                "C:/Users/admin/Desktop/claynut.mp4",
-                "C:/Users/admin/Desktop/Italian food.mp4"
-            ]
-        },
-        "Show 2": {
-            "Season 1": [
-                "C:/Users/admin/Desktop/me_and_grandma.mp4",
-                "C:/Users/admin/Desktop/OddClappas.mp4",
-                "C:/Users/admin/Desktop/We sucking dick.mp4"
-            ]
-        },
-    };
+    // Function to dynamically build video library from filesystem
+    function buildVideoLibrary() {
+        const videosPath = '../Videos'; // Go up one directory level to find Videos folder
+        const videoLibrary = {};
+        
+        try {
+            // Get all show directories
+            const showDirs = fs.readdirSync(videosPath, { withFileTypes: true })
+                .filter(dirent => dirent.isDirectory())
+                .map(dirent => dirent.name);
+            
+            for (const showName of showDirs) {
+                const showPath = path.join(videosPath, showName);
+                videoLibrary[showName] = {};
+                
+                // Get all season directories within each show
+                const seasonDirs = fs.readdirSync(showPath, { withFileTypes: true })
+                    .filter(dirent => dirent.isDirectory())
+                    .map(dirent => dirent.name)
+                    .sort(); // Sort seasons naturally
+                
+                for (const seasonName of seasonDirs) {
+                    const seasonPath = path.join(showPath, seasonName);
+                    
+                    // Get all video files in the season directory
+                    const videoFiles = fs.readdirSync(seasonPath, { withFileTypes: true })
+                        .filter(dirent => dirent.isFile())
+                        .filter(dirent => {
+                            const ext = path.extname(dirent.name).toLowerCase();
+                            return ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv'].includes(ext);
+                        })
+                        .map(dirent => path.join(seasonPath, dirent.name))
+                        .sort(); // Sort episodes naturally
+                    
+                    if (videoFiles.length > 0) {
+                        videoLibrary[showName][seasonName] = videoFiles;
+                    }
+                }
+                
+                // Remove show if it has no seasons with videos
+                if (Object.keys(videoLibrary[showName]).length === 0) {
+                    delete videoLibrary[showName];
+                }
+            }
+            
+            console.log('Video library built successfully:');
+            Object.keys(videoLibrary).forEach(show => {
+                console.log(`  ${show}:`);
+                Object.keys(videoLibrary[show]).forEach(season => {
+                    console.log(`    ${season}: ${videoLibrary[show][season].length} episodes`);
+                });
+            });
+            
+            return videoLibrary;
+        } catch (error) {
+            console.error('Error building video library:', error);
+            // Fallback to empty library
+            return {};
+        }
+    }
 
-    // Current active playlist
-    let currentShow = "Show 1";
-    let currentSeason = "Season 1";
+    // Build the video library dynamically from filesystem
+    const videoLibrary = buildVideoLibrary();
+
+    // Ensure we have at least one show to work with
+    if (Object.keys(videoLibrary).length === 0) {
+        console.error('No video library found! Make sure the Videos folder contains shows and seasons with video files.');
+        process.exit(1);
+    }
+
+    // Current active playlist - use the first available show and season
+    let currentShow = Object.keys(videoLibrary)[0];
+    let currentSeason = Object.keys(videoLibrary[currentShow])[0];
     let videoList = videoLibrary[currentShow][currentSeason];
 
     // Function to extract video title from file path
@@ -98,6 +147,40 @@ async function main() {
     setInterval(sendHelpReminder, 20 * 60 * 1000); // 20 minutes in milliseconds
 
     streamer.client.on('messageCreate', async (message) => {
+        if (message.content === "$refresh") {
+            // Refresh the video library from filesystem
+            const newVideoLibrary = buildVideoLibrary();
+            
+            if (Object.keys(newVideoLibrary).length === 0) {
+                message.reply("❌ **Error:** No videos found in the Videos folder!");
+                return;
+            }
+            
+            // Update the global video library
+            Object.keys(videoLibrary).forEach(key => delete videoLibrary[key]);
+            Object.assign(videoLibrary, newVideoLibrary);
+            
+            // Validate current show/season still exist
+            if (!videoLibrary[currentShow] || !videoLibrary[currentShow][currentSeason]) {
+                // Reset to first available show/season
+                currentShow = Object.keys(videoLibrary)[0];
+                currentSeason = Object.keys(videoLibrary[currentShow])[0];
+                videoList = videoLibrary[currentShow][currentSeason];
+                currentVideoIndex = 0;
+                
+                message.reply(`🔄 **Video library refreshed!**\n📺 **Reset to:** ${currentShow} → ${currentSeason}\n📚 Use \`$library\` to see updated content.`);
+            } else {
+                // Update current video list in case episodes changed
+                videoList = videoLibrary[currentShow][currentSeason];
+                
+                // Ensure current video index is still valid
+                if (currentVideoIndex >= videoList.length) {
+                    currentVideoIndex = 0;
+                }
+                
+                message.reply(`🔄 **Video library refreshed!**\n📺 **Current:** ${currentShow} → ${currentSeason}\n📚 Use \`$library\` to see updated content.`);
+            }
+        }
         if (message.content === "$help") {
             // Comprehensive help command
             const helpText = `
@@ -106,18 +189,22 @@ async function main() {
 **📚 Library Navigation:**
 \`$library\` - Show all shows and seasons with quick jump commands
 \`$library detailed\` - Show every episode with individual jump commands
+\`$refresh\` - Refresh video library from filesystem (after adding new videos)
 \`$show [name]\` - Switch to a different show (no spaces, e.g. Show1)
 \`$season [number]\` - Switch to a different season (number only, e.g. 1)
 \`$playlist\` - Show current season episodes
 
+
 **▶️ Playback Controls:**
 \`$start\` - Start/resume video playback
 \`$stop\` - Stop video playback completely
-\`$skip [number]\` - Jump to specific episode (e.g. \`$skip 3\`)
+\`$skip [number]\` - Jump to specific episode in current season (e.g. \`$skip 3\`)
 \`$jump [title]\` - Jump to episode by name in current season
 \`$jump [show] [season]\` - Jump to first episode (e.g. \`$jump Show1 2\`)
 \`$jump [show] [season] [episode]\` - Jump to specific episode
 \`$jump [show] [season] [number]\` - Jump by episode number
+\`$pause\` - Pause video playback **COMING SOON**
+\`$play\` - Resume video playback **COMING SOON**
 
 **📖 Examples:**
 \`$library\` → See all shows with copy-ready jump commands
@@ -145,18 +232,16 @@ async function main() {
             // Show the entire video library structure with copy-ready commands
             let libraryText = "📚 **Video Library with Commands:**\n\n";
             Object.keys(videoLibrary).forEach(show => {
-                const isCurrentShow = show === currentShow ? "▶️ " : "   ";
                 const showClean = show.replace(/\s+/g, '');
                 const firstSeasonNumber = Object.keys(videoLibrary[show])[0].match(/\d+/)?.[0] || '1';
-                libraryText += `${isCurrentShow}**${show}**\n`;
-                libraryText += `     🎯 \`$jump ${showClean} ${firstSeasonNumber}\` - Start from beginning\n`;
+                libraryText += `**${show}**\n`;
+                libraryText += `      \`$jump ${showClean} ${firstSeasonNumber}\` - Start from beginning\n`;
                 
                 Object.keys(videoLibrary[show]).forEach(season => {
-                    const isCurrentSeason = show === currentShow && season === currentSeason ? "  ▶️ " : "     ";
                     const episodeCount = videoLibrary[show][season].length;
                     const seasonNumber = season.match(/\d+/)?.[0] || '1';
-                    libraryText += `${isCurrentSeason}${season} (${episodeCount} episodes)\n`;
-                    libraryText += `       🎯 \`$jump ${showClean} ${seasonNumber}\` - Start ${season}\n`;
+                    libraryText += `**${season}** (${episodeCount} episodes)\n`;
+                    libraryText += `        \`$jump ${showClean} ${seasonNumber}\` - Start ${season}\n`;
                 });
                 libraryText += "\n";
             });
@@ -168,21 +253,19 @@ async function main() {
             // Show detailed library with episode-by-episode commands
             let detailedText = "📚 **Detailed Library with Episode Commands:**\n\n";
             Object.keys(videoLibrary).forEach(show => {
-                const isCurrentShow = show === currentShow ? "▶️ " : "   ";
                 const showClean = show.replace(/\s+/g, '');
-                detailedText += `${isCurrentShow}**${show}**\n`;
+                detailedText += `**${show}**\n`;
                 
                 Object.keys(videoLibrary[show]).forEach(season => {
-                    const isCurrentSeason = show === currentShow && season === currentSeason ? "  ▶️ " : "     ";
                     const seasonNumber = season.match(/\d+/)?.[0] || '1';
-                    detailedText += `${isCurrentSeason}**${season}**\n`;
+                    detailedText += `**${season}**\n`;
                     
                     videoLibrary[show][season].forEach((video, index) => {
                         const episodeTitle = getVideoTitle(video).trim();
                         const episodeNumber = index + 1;
                         
-                        detailedText += `       ${episodeNumber}. ${episodeTitle}\n`;
-                        detailedText += `          🎯 \`$jump ${showClean} ${seasonNumber} ${episodeNumber}\`\n`;
+                        detailedText += `${episodeNumber}. ${episodeTitle}`;
+                        detailedText += `\`$jump ${showClean} ${seasonNumber} ${episodeNumber}\` \n`;
                     });
                     detailedText += "\n";
                 });
@@ -531,7 +614,10 @@ async function main() {
                     '-fflags', '+discardcorrupt',
                     '-analyzeduration', '1000000',
                     '-probesize', '1000000',
-                    '-flush_packets', '1'
+                    '-flush_packets', '1',
+                    
+                    // Alternative: use codec copy for embedded subtitles (less CPU intensive but may not work with all subtitle formats)
+                    // '-c:s', 'mov_text'
                 ]
             }, controller.signal);
 
