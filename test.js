@@ -253,39 +253,48 @@ async function main() {
             // Show detailed library with episode-by-episode commands
             const headerText = "📚 **Detailed Library with Episode Commands:**\n\n";
             const footerText = `\n**Current:** ${currentShow} → ${currentSeason}, Episode ${currentVideoIndex + 1}\n💡 **Copy any \`$jump\` command above to jump directly to that episode!**`;
-            const maxLength = 1800; // More conservative limit to account for header/footer
+            const maxLength = 1500; // Even more conservative limit for episode lists
             let currentMessage = headerText;
             let messageCount = 1;
             
             Object.keys(videoLibrary).forEach(show => {
                 const showClean = show.replace(/\s+/g, '');
-                let showText = `**${show}**\n`;
                 
                 Object.keys(videoLibrary[show]).forEach(season => {
                     const seasonNumber = season.match(/\d+/)?.[0] || '1';
-                    showText += `  **${season}**\n`;
+                    let seasonHeader = `**${show} - ${season}**\n`;
                     
+                    // Check if adding season header would exceed limit
+                    if (currentMessage.length + seasonHeader.length + footerText.length > maxLength) {
+                        // Send current message and start new one
+                        textChannel.send(currentMessage);
+                        messageCount++;
+                        currentMessage = `📚 **Detailed Library (Part ${messageCount}):**\n\n` + seasonHeader;
+                    } else {
+                        currentMessage += seasonHeader;
+                    }
+                    
+                    // Process episodes in batches
                     videoLibrary[show][season].forEach((video, index) => {
                         const episodeTitle = getVideoTitle(video).trim();
                         const episodeNumber = index + 1;
                         
-                        showText += `    ${episodeNumber}. ${episodeTitle}\n`;
-                        showText += `    🎯 \`$jump ${showClean} ${seasonNumber} ${episodeNumber}\`\n`;
+                        let episodeText = `  ${episodeNumber}. ${episodeTitle}\n`;
+                        episodeText += `  🎯 \`$jump ${showClean} ${seasonNumber} ${episodeNumber}\`\n`;
+                        
+                        // Check if adding this episode would exceed the limit
+                        if (currentMessage.length + episodeText.length + footerText.length > maxLength) {
+                            // Send current message and start new one
+                            textChannel.send(currentMessage);
+                            messageCount++;
+                            currentMessage = `📚 **Detailed Library (Part ${messageCount}):**\n\n**${show} - ${season}** (continued)\n` + episodeText;
+                        } else {
+                            currentMessage += episodeText;
+                        }
                     });
-                    showText += "\n";
+                    
+                    currentMessage += "\n"; // Add spacing after each season
                 });
-                showText += "\n";
-                
-                // Check if adding this show would exceed the limit
-                if (currentMessage.length + showText.length + footerText.length > maxLength) {
-                    // Send current message
-                    textChannel.send(currentMessage);
-                    messageCount++;
-                    // Start new message with header
-                    currentMessage = `📚 **Detailed Library (Part ${messageCount}):**\n\n` + showText;
-                } else {
-                    currentMessage += showText;
-                }
             });
             
             // Add footer to the final message
