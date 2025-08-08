@@ -128,6 +128,10 @@ async function main() {
     let currentController = null; // Add this to track the current controller
     let isPlaying = true; // Add flag to control if the loop should continue
     let isJumping = false; // Add flag to prevent auto-progression during jumps
+    let isPaused = false; // Add flag to track pause state
+    let pauseTimestamp = null; // Track when pause was initiated
+    let videoStartTime = null; // Track when current video started
+    let resumeFromSeconds = 5; // Default skip intro seconds
 
     // Help reminder system
     function sendHelpReminder() {
@@ -203,8 +207,8 @@ async function main() {
 \`$jump [show] [season]\` - Jump to first episode (e.g. \`$jump Show1 2\`)
 \`$jump [show] [season] [episode]\` - Jump to specific episode
 \`$jump [show] [season] [number]\` - Jump by episode number
-\`$pause\` - Pause video playback **COMING SOON**
-\`$play\` - Resume video playback **COMING SOON**
+\`$pause\` - Pause video playback
+\`$play\` - Resume video playback
 
 **📖 Examples:**
 \`$library\` → See all shows with copy-ready jump commands
@@ -222,7 +226,7 @@ async function main() {
 **Show:** ${currentShow}
 **Season:** ${currentSeason}
 **Episode:** ${currentVideoIndex + 1}/${videoList.length}
-**Status:** ${isPlaying ? '▶️ Playing' : '⏹️ Stopped'}
+**Status:** ${isPlaying ? (isPaused ? '⏸️ Paused' : '▶️ Playing') : '⏹️ Stopped'}
 
 **💡 Tip:** All commands support case-insensitive matching for shows and seasons.`;
 
@@ -376,9 +380,74 @@ async function main() {
             
             textChannel.send(playlistText);
         }
+        if (message.content === "$pause") {
+            // Pause the current video
+            if (!isPlaying) {
+                message.reply('⏹️ Video is not playing!');
+                return;
+            }
+            
+            if (isPaused) {
+                message.reply('⏸️ Video is already paused!');
+                return;
+            }
+            
+            if (videoStartTime) {
+                // Calculate how long the video has been playing
+                const currentTime = Date.now();
+                const playedDuration = Math.floor((currentTime - videoStartTime) / 1000); // Convert to seconds
+                
+                // Add the played duration to our resume point
+                resumeFromSeconds += playedDuration;
+                
+                console.log(`Video paused after ${playedDuration} seconds. Will resume from ${resumeFromSeconds} seconds.`);
+                
+                // Stop the current stream
+                isPaused = true;
+                pauseTimestamp = currentTime;
+                streamer.stopStream();
+                
+                if (currentController) {
+                    currentController.abort();
+                }
+                
+                message.reply(`⏸️ **Video paused!**\n⏱️ **Paused at:** ${Math.floor(resumeFromSeconds / 60)}:${(resumeFromSeconds % 60).toString().padStart(2, '0')}\n▶️ Use \`$play\` to resume from this position.`);
+            } else {
+                message.reply('❌ **No active video to pause!**');
+            }
+        }
+        if (message.content === "$play") {
+            // Resume the current video
+            if (!isPlaying) {
+                message.reply('⏹️ Video is not playing! Use `$start` to begin playback.');
+                return;
+            }
+            
+            if (!isPaused) {
+                message.reply('▶️ Video is already playing!');
+                return;
+            }
+            
+            // Resume from the stored position
+            isPaused = false;
+            pauseTimestamp = null;
+            
+            const resumeMinutes = Math.floor(resumeFromSeconds / 60);
+            const resumeSecondsDisplay = resumeFromSeconds % 60;
+            
+            message.reply(`▶️ **Resuming video from:** ${resumeMinutes}:${resumeSecondsDisplay.toString().padStart(2, '0')}`);
+            console.log(`Resuming video from ${resumeFromSeconds} seconds`);
+            
+            // Start the video loop again - it will use the stored resumeFromSeconds
+            playVideoLoop();
+        }
         if (message.content === "$stop") {
             // Stop the entire video loop
             isPlaying = false; // Stop the loop from continuing
+            isPaused = false; // Reset pause state
+            pauseTimestamp = null; // Clear pause timestamp
+            videoStartTime = null; // Clear video start time
+            resumeFromSeconds = 0; // Reset to default skip intro
             streamer.stopStream();
             if (currentController) {
                 currentController.abort();
@@ -407,6 +476,10 @@ async function main() {
             console.log(`Target is ${currentVideoIndex} by user command`);
 
             // Stop current video using the same logic as $stop
+            isPaused = false; // Reset pause state
+            pauseTimestamp = null; // Clear pause timestamp
+            videoStartTime = null; // Clear video start time
+            resumeFromSeconds = 0; // Reset to default skip intro
             streamer.stopStream();
             if (currentController) {
                 currentController.abort();
@@ -549,6 +622,10 @@ async function main() {
             // Stop current playback
             isPlaying = false;
             isJumping = true; // Prevent auto-progression
+            isPaused = false; // Reset pause state
+            pauseTimestamp = null; // Clear pause timestamp
+            videoStartTime = null; // Clear video start time
+            resumeFromSeconds = 0; // Reset to default skip intro
             streamer.stopStream();
             if (currentController) {
                 currentController.abort();
@@ -582,8 +659,12 @@ async function main() {
             // Start/resume playing the video loop
             if (!isPlaying) {
                 isPlaying = true;
+                isPaused = false; // Ensure not in paused state
+                pauseTimestamp = null; // Clear pause timestamp
+                videoStartTime = null; // Will be set in playVideoLoop
+                resumeFromSeconds = 5; // Reset to default skip intro
                 const currentVideo = videoList[currentVideoIndex];
-                console.log(`Resuming video loop at ${currentVideoIndex + 1}: ${getVideoTitle(currentVideo)}`);
+                console.log(`Starting video loop at ${currentVideoIndex + 1}: ${getVideoTitle(currentVideo)}`);
                 message.reply(`▶️ **Starting playback!**\n📺 **${currentShow} → ${currentSeason}**\n🎥 **Episode ${currentVideoIndex + 1}:** ${getVideoTitle(currentVideo).trim()}`);
                 playVideoLoop();
             } else {
@@ -594,8 +675,8 @@ async function main() {
 
     async function playVideoLoop(index) {
         // Check if we should stop the loop
-        if (!isPlaying) {
-            console.log('Video loop stopped by user');
+        if (!isPlaying || isPaused) {
+            console.log('Video loop stopped by user or paused');
             return; // Exit the function completely
         }
         
@@ -619,10 +700,16 @@ async function main() {
             console.log(`Starting video ${videoCount} (${currentVideoIndex + 1}/${videoList.length}): ${videoTitle}`);
             console.log(`Current video L143 ${currentVideoIndex}`);
             
+            // Set video start time for pause tracking
+            videoStartTime = Date.now();
+            
             // Send video title to text channel
             if (textChannel) {
                 try {
-                    await textChannel.send(`� **${currentShow} → ${currentSeason}**\n🎥 **Episode ${currentVideoIndex + 1}:** ${videoTitle.trim()}\n`);
+                    const resumeMinutes = Math.floor(resumeFromSeconds / 60);
+                    const resumeSecondsDisplay = resumeFromSeconds % 60;
+                    const timeInfo = resumeFromSeconds > 5 ? ` (resuming from ${resumeMinutes}:${resumeSecondsDisplay.toString().padStart(2, '0')})` : '';
+                    await textChannel.send(`📺 **${currentShow} → ${currentSeason}**\n🎥 **Episode ${currentVideoIndex + 1}:** ${videoTitle.trim()}${timeInfo}\n`);
                 } catch (msgError) {
                     console.error("Failed to send message to text channel:", msgError.message);
                 }
@@ -635,7 +722,7 @@ async function main() {
                 bitrateVideoMax: 7500,
                 videoCodec: Utils.normalizeVideoCodec("H264"),
                 h26xPreset: "veryfast",
-                additionalArgs: [
+                customFfmpegFlags: [
                     '-loglevel', 'error',
                     '-hide_banner',
                     '-nostats',
@@ -643,13 +730,27 @@ async function main() {
                     '-analyzeduration', '1000000',
                     '-probesize', '1000000',
                     '-flush_packets', '1',
-                    
-                    // Alternative: use codec copy for embedded subtitles (less CPU intensive but may not work with all subtitle formats)
-                    // '-c:s', 'mov_text'
                 ]
             }, controller.signal);
-
+            
             command = streamData.command;
+            
+            // Use the stored resume position
+            const seekTime = `00:${Math.floor(resumeFromSeconds / 60).toString().padStart(2, '0')}:${(resumeFromSeconds % 60).toString().padStart(2, '0')}`;
+            command.addInputOption('-ss', seekTime);
+            console.log(`Seeking to: ${seekTime} (${resumeFromSeconds} seconds)`);
+
+            
+            // Print the complete FFmpeg command after it's fully configured
+            console.log('\n=== COMPLETE FFMPEG COMMAND ===');
+            try {
+                console.log(`ffmpeg ${command._getArguments().join(' ')}`);
+            } catch (err) {
+                console.log('Could not get command arguments:', err.message);
+                console.log('Command object:', command);
+            }
+            console.log('=== END FFMPEG COMMAND ===\n');
+            
             output = streamData.output;
 
             command.on("error", (err, stdout, stderr) => {
@@ -686,6 +787,12 @@ async function main() {
                 }
             } catch (cleanupError) {
                 console.error('Cleanup error:', cleanupError.message);
+            }
+
+            // Reset pause state and resume position when video ends naturally
+            if (!isPaused) {
+                resumeFromSeconds = 0; // Reset to default skip intro for next video
+                videoStartTime = null;
             }
 
             // Force garbage collection if available
