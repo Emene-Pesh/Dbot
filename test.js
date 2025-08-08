@@ -251,9 +251,11 @@ async function main() {
         }
         if (message.content === "$library detailed") {
             // Show detailed library with episode-by-episode commands
-            let detailedText = "📚 **Detailed Library with Episode Commands:**\n\n";
-            const maxLength = 1900; // Leave some buffer for Discord's 2000 char limit
-            let currentMessage = detailedText;
+            const headerText = "📚 **Detailed Library with Episode Commands:**\n\n";
+            const footerText = `\n**Current:** ${currentShow} → ${currentSeason}, Episode ${currentVideoIndex + 1}\n💡 **Copy any \`$jump\` command above to jump directly to that episode!**`;
+            const maxLength = 1800; // More conservative limit to account for header/footer
+            let currentMessage = headerText;
+            let messageCount = 1;
             
             Object.keys(videoLibrary).forEach(show => {
                 const showClean = show.replace(/\s+/g, '');
@@ -261,32 +263,33 @@ async function main() {
                 
                 Object.keys(videoLibrary[show]).forEach(season => {
                     const seasonNumber = season.match(/\d+/)?.[0] || '1';
-                    showText += `**${season}**\n`;
+                    showText += `  **${season}**\n`;
                     
                     videoLibrary[show][season].forEach((video, index) => {
                         const episodeTitle = getVideoTitle(video).trim();
                         const episodeNumber = index + 1;
                         
-                        showText += `${episodeNumber}. ${episodeTitle}\n`;
-                        showText += `\`$jump ${showClean} ${seasonNumber} ${episodeNumber}\`\n`;
+                        showText += `    ${episodeNumber}. ${episodeTitle}\n`;
+                        showText += `    🎯 \`$jump ${showClean} ${seasonNumber} ${episodeNumber}\`\n`;
                     });
                     showText += "\n";
                 });
                 showText += "\n";
                 
                 // Check if adding this show would exceed the limit
-                if (currentMessage.length + showText.length > maxLength) {
-                    // Send current message and start a new one
+                if (currentMessage.length + showText.length + footerText.length > maxLength) {
+                    // Send current message
                     textChannel.send(currentMessage);
-                    currentMessage = showText;
+                    messageCount++;
+                    // Start new message with header
+                    currentMessage = `📚 **Detailed Library (Part ${messageCount}):**\n\n` + showText;
                 } else {
                     currentMessage += showText;
                 }
             });
             
-            // Add the current info and tip to the last message
-            currentMessage += `**Current:** ${currentShow} → ${currentSeason}, Episode ${currentVideoIndex + 1}\n`;
-            currentMessage += `💡 **Copy any \`$jump\` command above to jump directly to that episode!**`;
+            // Add footer to the final message
+            currentMessage += footerText;
             
             // Send the final message
             textChannel.send(currentMessage);
