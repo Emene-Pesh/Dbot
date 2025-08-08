@@ -252,28 +252,44 @@ async function main() {
         if (message.content === "$library detailed") {
             // Show detailed library with episode-by-episode commands
             let detailedText = "📚 **Detailed Library with Episode Commands:**\n\n";
+            const maxLength = 1900; // Leave some buffer for Discord's 2000 char limit
+            let currentMessage = detailedText;
+            
             Object.keys(videoLibrary).forEach(show => {
                 const showClean = show.replace(/\s+/g, '');
-                detailedText += `**${show}**\n`;
+                let showText = `**${show}**\n`;
                 
                 Object.keys(videoLibrary[show]).forEach(season => {
                     const seasonNumber = season.match(/\d+/)?.[0] || '1';
-                    detailedText += `**${season}**\n`;
+                    showText += `**${season}**\n`;
                     
                     videoLibrary[show][season].forEach((video, index) => {
                         const episodeTitle = getVideoTitle(video).trim();
                         const episodeNumber = index + 1;
                         
-                        detailedText += `${episodeNumber}. ${episodeTitle}`;
-                        detailedText += `\`$jump ${showClean} ${seasonNumber} ${episodeNumber}\` \n`;
+                        showText += `${episodeNumber}. ${episodeTitle}\n`;
+                        showText += `\`$jump ${showClean} ${seasonNumber} ${episodeNumber}\`\n`;
                     });
-                    detailedText += "\n";
+                    showText += "\n";
                 });
-                detailedText += "\n";
+                showText += "\n";
+                
+                // Check if adding this show would exceed the limit
+                if (currentMessage.length + showText.length > maxLength) {
+                    // Send current message and start a new one
+                    textChannel.send(currentMessage);
+                    currentMessage = showText;
+                } else {
+                    currentMessage += showText;
+                }
             });
-            detailedText += `**Current:** ${currentShow} → ${currentSeason}, Episode ${currentVideoIndex + 1}\n`;
-            detailedText += `💡 **Copy any \`$jump\` command above to jump directly to that episode!**`;
-            textChannel.send(detailedText);
+            
+            // Add the current info and tip to the last message
+            currentMessage += `**Current:** ${currentShow} → ${currentSeason}, Episode ${currentVideoIndex + 1}\n`;
+            currentMessage += `💡 **Copy any \`$jump\` command above to jump directly to that episode!**`;
+            
+            // Send the final message
+            textChannel.send(currentMessage);
         }
         if (message.content.startsWith("$show ")) {
             // Switch to a different show
